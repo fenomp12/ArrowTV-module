@@ -1,5 +1,5 @@
 /*
- * ArrowTV (arrowtv.net) — Sora / Shirox module — v1.4.3
+ * ArrowTV (arrowtv.net) — Sora / Shirox module — v1.4.4
  * Movies + TV shows. One standalone JavaScript file; no proxy, key or dependencies.
  *
  * Search, details and episodes come from arrowtv.net's own API/pages.
@@ -30,7 +30,7 @@ function arPage(type, id) {
 }
 function arLog(stage, error) {
     if (typeof console !== 'undefined' && typeof console.log === 'function')
-        console.log('[ArrowTV 1.4.3] ' + stage + ': ' + String(error && error.message || error));
+        console.log('[ArrowTV 1.4.4] ' + stage + ': ' + String(error && error.message || error));
 }
 async function soraFetch(url, options) {
     options = options || {};
@@ -262,8 +262,9 @@ function arSubList(url, headers) {
 function arSubsCached(p) {
     var path = p.type === 'tv' ? 'tv/' + p.id + '/' + p.season + '/' + p.episode : 'movie/' + p.id;
     return arCached('subs:' + arKey(p), AR_STREAM_TTL, function () {
-        return Promise.all([arSubList('https://sub.vdrk.site/v1/' + path), arSubList('https://sub.vdrk.site/v2/' + path)]).then(function (r) {
-            var seen = {}, vtt = r[0].concat(r[1]).filter(function (s) { var k = s.title.toLowerCase(); if (seen[k]) return false; seen[k] = true; return true; });
+        // only v1: v2 can take 8+ s on new titles and would hold up playback
+        return Promise.all([arSubList('https://sub.vdrk.site/v1/' + path)]).then(function (r) {
+            var seen = {}, vtt = r[0].filter(function (s) { var k = s.title.toLowerCase(); if (seen[k]) return false; seen[k] = true; return true; });
             if (vtt.length) return vtt;
             return arSubList('https://proxy1.flikhub.net/subtitles/' + path, AR_PLAYER_HEADERS); // .srt fallback
         });
