@@ -1,5 +1,5 @@
 /*
- * ArrowTV (arrowtv.net) — Sora / Shirox module — v1.4.2
+ * ArrowTV (arrowtv.net) — Sora / Shirox module — v1.4.3
  * Movies + TV shows. One standalone JavaScript file; no proxy, key or dependencies.
  *
  * Search, details and episodes come from arrowtv.net's own API/pages.
@@ -30,7 +30,7 @@ function arPage(type, id) {
 }
 function arLog(stage, error) {
     if (typeof console !== 'undefined' && typeof console.log === 'function')
-        console.log('[ArrowTV 1.4.2] ' + stage + ': ' + String(error && error.message || error));
+        console.log('[ArrowTV 1.4.3] ' + stage + ': ' + String(error && error.message || error));
 }
 async function soraFetch(url, options) {
     options = options || {};
@@ -273,7 +273,7 @@ function arSubsCached(p) {
 // 3 = Portuguese (BR) / Brazilian, 4 = anything else
 function arSubRank(title) {
     var t = String(title).toLowerCase();
-    if (/^english/.test(t)) return /\bhi\b|sdh/.test(t) ? 1 : 0;
+    if (/^english/.test(t)) return /\bhi\d*\b|sdh|hearing/.test(t) ? 1 : 0;
     if (/^portuguese(\s*\d*)$/.test(t) || /^portuguese \((pt|portugal)\)/.test(t)) return 2;
     if (/^portuguese/.test(t) || /^brazil/.test(t)) return 3;
     return 4;
