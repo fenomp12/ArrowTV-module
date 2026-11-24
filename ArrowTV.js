@@ -1,5 +1,5 @@
 /*
- * ArrowTV (arrowtv.net) — Sora / Shirox module — v1.0.0
+ * ArrowTV (arrowtv.net) — Sora / Shirox module — v1.0.1
  * Movies + TV shows. One standalone JavaScript file; no proxy, key or dependencies.
  *
  * Search, details and episodes come from arrowtv.net's own API/pages.
@@ -16,7 +16,7 @@ var AR_PLAYER_HEADERS = { 'User-Agent': AR_UA, Referer: AR_PLAYER + '/', Origin:
 
 function arLog(stage, error) {
     if (typeof console !== 'undefined' && typeof console.log === 'function')
-        console.log('[ArrowTV 1.0.0] ' + stage + ': ' + String(error && error.message || error));
+        console.log('[ArrowTV 1.0.1] ' + stage + ': ' + String(error && error.message || error));
 }
 async function soraFetch(url, options) {
     options = options || {};
@@ -93,7 +93,7 @@ async function extractDetails(url) {
         genres = genres ? (genres[1].match(/"([^"]*)"/g) || []).map(function (g) { return g.slice(1, -1); }).join(', ') : '';
         var years = page.match(/"years":"([^"]*)"/), release = page.match(/"releaseDate":"([^"]*)"/);
         var runtime = page.match(/"runtimeMin":(\d+)/) || page.match(/"runtime":(\d+)/);
-        var seasons = page.match(/"seasonsCount":(\d+)/);
+        var seasons = p.type === 'tv' ? page.match(/"seasonsCount":([1-9]\d*)/) : null;
         var extra = [genres, runtime ? runtime[1] + ' min' : '', seasons ? seasons[1] + ' season' + (seasons[1] === '1' ? '' : 's') : '']
             .filter(function (v) { return v; }).join(' • ');
         return JSON.stringify([{
@@ -162,8 +162,10 @@ async function arJennifer(p) {
     var j = await arJson(arSourceUrl('jennifer', p), AR_PLAYER_HEADERS);
     var url = j.stream && (j.stream.hls || j.stream.original);
     if (!arPlayable(url)) return null;
-    var res = j.quality && j.quality.resolution ? parseInt(String(j.quality.resolution).split('x')[1], 10) : 0;
-    var q = res >= 1500 ? '4K' : res >= 1000 ? '1080p' : res ? res + 'p' : 'Auto';
+    // label by width: widescreen films are e.g. 1920x800 (still 1080p) or 3840x1600 (4K)
+    var wh = j.quality && j.quality.resolution ? String(j.quality.resolution).split('x') : [];
+    var w = parseInt(wh[0], 10) || 0, h = parseInt(wh[1], 10) || 0;
+    var q = w >= 3000 ? '4K' : w >= 1800 ? '1080p' : w >= 1200 ? '720p' : h ? h + 'p' : 'Auto';
     var subs = (j.subtitles || []).filter(function (s) { return /^https?:\/\//i.test(s.url || ''); });
     var en = subs.filter(function (s) { return /^en/i.test(s.language || '') && !/sdh/i.test(s.title || ''); })[0] || subs.filter(function (s) { return /^en/i.test(s.language || ''); })[0];
     return { streams: [{ title: 'Jennifer · ' + q + ' · Auto quality', streamUrl: url, headers: AR_PLAYER_HEADERS }], subtitle: en ? en.url : '' };
