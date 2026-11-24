@@ -1,5 +1,5 @@
 /*
- * ArrowTV (arrowtv.net) — Sora / Shirox module — v1.3.0
+ * ArrowTV (arrowtv.net) — Sora / Shirox module — v1.4.0
  * Movies + TV shows. One standalone JavaScript file; no proxy, key or dependencies.
  *
  * Search, details and episodes come from arrowtv.net's own API/pages.
@@ -30,7 +30,7 @@ function arPage(type, id) {
 }
 function arLog(stage, error) {
     if (typeof console !== 'undefined' && typeof console.log === 'function')
-        console.log('[ArrowTV 1.3.0] ' + stage + ': ' + String(error && error.message || error));
+        console.log('[ArrowTV 1.4.0] ' + stage + ': ' + String(error && error.message || error));
 }
 async function soraFetch(url, options) {
     options = options || {};
@@ -183,9 +183,50 @@ async function arJennifer(p) {
     var q = w >= 3000 ? '4K' : w >= 1800 ? '1080p' : w >= 1200 ? '720p' : h ? h + 'p' : 'Auto';
     var subs = (j.subtitles || []).filter(function (s) { return /^https?:\/\//i.test(s.url || ''); });
     var en = subs.filter(function (s) { return /^en/i.test(s.language || '') && !/sdh/i.test(s.title || ''); })[0] || subs.filter(function (s) { return /^en/i.test(s.language || ''); })[0];
-    // One adaptive stream: the player switches between the available qualities itself.
-    // (The per-quality playlists carry no audio, so they can't be offered separately.)
-    return { streams: [{ title: 'Jennifer · Auto (up to ' + q + ')', streamUrl: url, headers: AR_PLAYER_HEADERS }], subtitle: en ? en.url : '' };
+    var streams = [{ title: 'Jennifer · Auto (up to ' + q + ')', streamUrl: url, headers: AR_PLAYER_HEADERS }];
+    // Fixed-quality options: the server's per-quality playlists are video-only (audio is a
+    // separate track), so we build a small master playlist per quality that keeps the
+    // audio + subtitle tracks, and hand it to the player as a data: URL.
+    try { streams = streams.concat(arFixedQualities(await arGet(url, AR_PLAYER_HEADERS), url)); }
+    catch (e) { arLog('qualities', e); }
+    return { streams: streams, subtitle: en ? en.url : '' };
+}
+function arAbs(u, base) {
+    if (/^https?:\/\//i.test(u)) return u;
+    var origin = base.match(/^https?:\/\/[^/]+/)[0];
+    return u.charAt(0) === '/' ? origin + u : base.split('?')[0].replace(/[^/]*$/, '') + u;
+}
+function arBase64(str) {
+    var bytes = unescape(encodeURIComponent(str)), out = '', chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/';
+    for (var i = 0; i < bytes.length; i += 3) {
+        var a = bytes.charCodeAt(i), b = bytes.charCodeAt(i + 1), c = bytes.charCodeAt(i + 2);
+        var n = (a << 16) | ((b || 0) << 8) | (c || 0);
+        out += chars.charAt(n >> 18 & 63) + chars.charAt(n >> 12 & 63) +
+            (i + 1 < bytes.length ? chars.charAt(n >> 6 & 63) : '=') + (i + 2 < bytes.length ? chars.charAt(n & 63) : '=');
+    }
+    return out;
+}
+function arFixedQualities(master, masterUrl) {
+    if (!/^\s*#EXTM3U/.test(master)) return [];
+    var lines = master.split(/\r?\n/), header = [], variants = [];
+    for (var i = 0; i < lines.length; i++) {
+        var l = lines[i].trim();
+        if (!l || l === '#EXTM3U') continue;
+        if (l.indexOf('#EXT-X-STREAM-INF') === 0) {
+            var next = (lines[i + 1] || '').trim();
+            if (next && next.charAt(0) !== '#') { variants.push({ inf: l, uri: arAbs(next, masterUrl) }); i++; }
+        } else if (l.charAt(0) === '#') {
+            header.push(l.replace(/URI="([^"]+)"/, function (_, u) { return 'URI="' + arAbs(u, masterUrl) + '"'; }));
+        }
+    }
+    if (variants.length < 2) return []; // nothing to choose from
+    return variants.map(function (v) {
+        var res = (v.inf.match(/RESOLUTION=(\d+)x(\d+)/) || []), w = parseInt(res[1], 10) || 0, h = parseInt(res[2], 10) || 0;
+        var label = w >= 3000 ? '4K' : w >= 1800 ? '1080p' : w >= 1200 ? '720p' : h ? h + 'p' : 'Video';
+        var text = ['#EXTM3U'].concat(header, [v.inf, v.uri]).join('\n') + '\n';
+        return { w: w, stream: { title: 'Jennifer · ' + label, streamUrl: 'data:application/vnd.apple.mpegurl;base64,' + arBase64(text), headers: AR_PLAYER_HEADERS } };
+    }).sort(function (a, b) { return a.w - b.w; }) // lowest first: 1080p before 4K
+      .map(function (x) { return x.stream; });
 }
 async function arProxySource(id, label, p) {
     var j = await arJson(arSourceUrl(id, p), AR_PLAYER_HEADERS);
