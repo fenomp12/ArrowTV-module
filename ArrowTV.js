@@ -1,5 +1,5 @@
 /*
- * ArrowTV (arrowtv.net) — Sora / Shirox module — v1.0.1
+ * ArrowTV (arrowtv.net) — Sora / Shirox module — v1.1.0
  * Movies + TV shows. One standalone JavaScript file; no proxy, key or dependencies.
  *
  * Search, details and episodes come from arrowtv.net's own API/pages.
@@ -14,9 +14,23 @@ var AR_IMG = 'https://image.tmdb.org/t/p/w500';
 var AR_UA = 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36';
 var AR_PLAYER_HEADERS = { 'User-Agent': AR_UA, Referer: AR_PLAYER + '/', Origin: AR_PLAYER };
 
+// Small in-memory cache of in-flight/finished requests, so details + episodes
+// share one page download and a prefetched stream is reused when you press play.
+var arCacheStore = {};
+function arCached(key, ttlMs, make) {
+    var now = Date.now(), c = arCacheStore[key];
+    if (c && c.expires > now) return c.promise;
+    var promise = make();
+    arCacheStore[key] = { promise: promise, expires: now + ttlMs };
+    promise.catch(function () { if (arCacheStore[key] && arCacheStore[key].promise === promise) delete arCacheStore[key]; });
+    return promise;
+}
+function arPage(type, id) {
+    return arCached('page:' + type + ':' + id, 10 * 60 * 1000, function () { return arGet(AR_BASE + '/' + type + '/' + id); });
+}
 function arLog(stage, error) {
     if (typeof console !== 'undefined' && typeof console.log === 'function')
-        console.log('[ArrowTV 1.0.1] ' + stage + ': ' + String(error && error.message || error));
+        console.log('[ArrowTV 1.1.0] ' + stage + ': ' + String(error && error.message || error));
 }
 async function soraFetch(url, options) {
     options = options || {};
@@ -86,7 +100,8 @@ async function searchResults(keyword) {
 async function extractDetails(url) {
     try {
         var p = arParse(url);
-        var html = await arGet(AR_BASE + '/' + p.type + '/' + p.id);
+        if (p.type === 'movie') arPrefetch(p); // warm the stream while the user reads
+        var html = await arPage(p.type, p.id);
         var desc = html.match(/<meta\s+name="description"\s+content="([^"]*)"/i);
         var page = arUnescape(html);
         var genres = page.match(/"genres":\[((?:"[^"]*",?)*)\]/);
@@ -123,8 +138,8 @@ function arSeasons(html) {
 async function extractEpisodes(url) {
     try {
         var p = arParse(url);
-        if (p.type === 'movie') return JSON.stringify([{ href: AR_BASE + '/movie/' + p.id, number: 1, title: 'Movie' }]);
-        var seasons = arSeasons(await arGet(AR_BASE + '/tv/' + p.id));
+        if (p.type === 'movie') { arPrefetch(p); return JSON.stringify([{ href: AR_BASE + '/movie/' + p.id, number: 1, title: 'Movie' }]); }
+        var seasons = arSeasons(await arPage('tv', p.id));
         if (!seasons.length) seasons = [1];
         var lists = await Promise.all(seasons.map(function (n) {
             return arJson(AR_BASE + '/api/tv-episodes?id=' + p.id + '&season=' + n).catch(function () { return { episodes: [] }; });
@@ -182,32 +197,41 @@ async function arProxySource(id, label, p) {
     });
     return streams.length ? { streams: streams, subtitle: '' } : null;
 }
-// Like Promise.all but returns once Jennifer (the main source) and all but one
-// of the others are in — no timers needed, a hung source can't block playback.
-function arGather(promises) {
-    return new Promise(function (resolve) {
-        var results = new Array(promises.length), done = 0, finished = false, n = promises.length, mainDone = false;
-        function check() {
-            if (finished) return;
-            var mainOk = mainDone && results[0];
-            if (done === n || (mainOk && done >= n - 1)) { finished = true; resolve(results); }
-        }
-        promises.forEach(function (pr, i) {
-            pr.then(function (r) { results[i] = r; }, function (e) { results[i] = null; arLog('source ' + i, e); })
-              .then(function () { if (i === 0) mainDone = true; done++; check(); });
-        });
-    });
+// Source requests are cached (links stay valid for hours), so a stream that was
+// prefetched — or the same episode opened again — resolves instantly.
+var AR_STREAM_TTL = 30 * 60 * 1000;
+function arKey(p) { return p.type + ':' + p.id + ':' + (p.season || 0) + ':' + (p.episode || 0); }
+function arJenniferCached(p) {
+    return arCached('jennifer:' + arKey(p), AR_STREAM_TTL, function () { return arJennifer(p); });
+}
+function arSadieCached(p) {
+    return arCached('sadie:' + arKey(p), AR_STREAM_TTL, function () { return arProxySource('sadie', 'Sadie (Hindi)', p); });
+}
+function arPrefetch(p) {
+    try { arJenniferCached(p).catch(function () {}); arSadieCached(p).catch(function () {}); } catch (e) { /* ignore */ }
+}
+function arSafe(promise, label) {
+    return promise.then(function (r) { return r; }, function (e) { arLog('source ' + label, e); return null; });
 }
 async function extractStreamUrl(url) {
     try {
         var p = arParse(url);
         if (p.type === 'tv' && (!p.season || !p.episode)) throw new Error('An episode URL is required.');
-        var results = await arGather([
-            arJennifer(p),
-            arProxySource('sadie', 'Sadie (Hindi)', p),
-            arProxySource('berlin', 'Berlin', p),
-            arProxySource('scarlet', 'Scarlet', p)
-        ]);
+        // Jennifer (~0.25 s) and Sadie run in parallel. Return as soon as Jennifer
+        // answers; Sadie is added only if it is already in, so it never slows playback.
+        var sadieResult, sadieDone = false;
+        var sadie = arSafe(arSadieCached(p), 'sadie').then(function (r) { sadieResult = r; sadieDone = true; return r; });
+        var jennifer = await arSafe(arJenniferCached(p), 'jennifer');
+        var results = [jennifer];
+        if (!jennifer) results.push(await sadie); // main source failed: wait for Sadie
+        else if (sadieDone) results.push(sadieResult);
+        if (!jennifer && !results[1]) {
+            // last resort: the rarely-available extra servers
+            results = results.concat(await Promise.all([
+                arSafe(arProxySource('berlin', 'Berlin', p), 'berlin'),
+                arSafe(arProxySource('scarlet', 'Scarlet', p), 'scarlet')
+            ]));
+        }
         var streams = [], subtitle = '';
         results.forEach(function (r) {
             if (!r) return;
