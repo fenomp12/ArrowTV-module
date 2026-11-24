@@ -1,5 +1,5 @@
 /*
- * ArrowTV (arrowtv.net) — Sora / Shirox module — v1.1.0
+ * ArrowTV (arrowtv.net) — Sora / Shirox module — v1.2.0
  * Movies + TV shows. One standalone JavaScript file; no proxy, key or dependencies.
  *
  * Search, details and episodes come from arrowtv.net's own API/pages.
@@ -30,7 +30,7 @@ function arPage(type, id) {
 }
 function arLog(stage, error) {
     if (typeof console !== 'undefined' && typeof console.log === 'function')
-        console.log('[ArrowTV 1.1.0] ' + stage + ': ' + String(error && error.message || error));
+        console.log('[ArrowTV 1.2.0] ' + stage + ': ' + String(error && error.message || error));
 }
 async function soraFetch(url, options) {
     options = options || {};
@@ -207,8 +207,32 @@ function arJenniferCached(p) {
 function arSadieCached(p) {
     return arCached('sadie:' + arKey(p), AR_STREAM_TTL, function () { return arProxySource('sadie', 'Sadie (Hindi)', p); });
 }
+// External subtitles (the same list ArrowTV's player shows): dozens of languages, ~0.2 s.
+// The first language found in AR_SUB_LANGS becomes the default subtitle.
+var AR_SUB_LANGS = ['Portuguese', 'Brazilian', 'English'];
+function arSubsCached(p) {
+    var path = p.type === 'tv' ? 'tv/' + p.id + '/' + p.season + '/' + p.episode : 'movie/' + p.id;
+    return arCached('subs:' + arKey(p), AR_STREAM_TTL, function () {
+        return arJson('https://proxy1.flikhub.net/subtitles/' + path, AR_PLAYER_HEADERS).then(function (list) {
+            return (Array.isArray(list) ? list : []).filter(function (s) { return s && /^https?:\/\//i.test(s.file || s.url || ''); })
+                .map(function (s) { return { title: String(s.label || 'Subtitles'), url: s.file || s.url }; });
+        });
+    });
+}
+function arPickSub(list) {
+    for (var i = 0; i < AR_SUB_LANGS.length; i++) {
+        var lang = AR_SUB_LANGS[i].toLowerCase();
+        for (var j = 0; j < list.length; j++) {
+            var t = list[j].title.toLowerCase();
+            if (t === lang || t.indexOf(lang + ' ') === 0) return list[j];
+        }
+    }
+    return null;
+}
 function arPrefetch(p) {
-    try { arJenniferCached(p).catch(function () {}); arSadieCached(p).catch(function () {}); } catch (e) { /* ignore */ }
+    try {
+        arJenniferCached(p).catch(function () {}); arSadieCached(p).catch(function () {}); arSubsCached(p).catch(function () {});
+    } catch (e) { /* ignore */ }
 }
 function arSafe(promise, label) {
     return promise.then(function (r) { return r; }, function (e) { arLog('source ' + label, e); return null; });
@@ -221,6 +245,7 @@ async function extractStreamUrl(url) {
         // answers; Sadie is added only if it is already in, so it never slows playback.
         var sadieResult, sadieDone = false;
         var sadie = arSafe(arSadieCached(p), 'sadie').then(function (r) { sadieResult = r; sadieDone = true; return r; });
+        var subsPromise = arSafe(arSubsCached(p), 'subtitles'); // in parallel, usually faster than Jennifer
         var jennifer = await arSafe(arJenniferCached(p), 'jennifer');
         var results = [jennifer];
         if (!jennifer) results.push(await sadie); // main source failed: wait for Sadie
@@ -240,8 +265,12 @@ async function extractStreamUrl(url) {
         });
         if (!streams.length) throw new Error('No source returned a stream.');
         arLog('stream', streams.length + ' streams');
+        var subs = (await subsPromise) || [];
+        var picked = arPickSub(subs);
+        if (picked) subtitle = picked.url; // preferred language beats the source's own English track
         var result = { streams: streams };
         if (subtitle) { result.subtitle = subtitle; result.subtitles = [subtitle]; }
+        if (subs.length) result.allSubtitles = subs.map(function (s) { return { title: s.title, url: s.url }; });
         return JSON.stringify(result);
     } catch (e) { arLog('stream', e); return JSON.stringify({ streams: [] }); }
 }
