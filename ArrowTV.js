@@ -1,5 +1,5 @@
 /*
- * ArrowTV (arrowtv.net) — Sora / Shirox module — v1.4.1
+ * ArrowTV (arrowtv.net) — Sora / Shirox module — v1.4.2
  * Movies + TV shows. One standalone JavaScript file; no proxy, key or dependencies.
  *
  * Search, details and episodes come from arrowtv.net's own API/pages.
@@ -30,7 +30,7 @@ function arPage(type, id) {
 }
 function arLog(stage, error) {
     if (typeof console !== 'undefined' && typeof console.log === 'function')
-        console.log('[ArrowTV 1.4.1] ' + stage + ': ' + String(error && error.message || error));
+        console.log('[ArrowTV 1.4.2] ' + stage + ': ' + String(error && error.message || error));
 }
 async function soraFetch(url, options) {
     options = options || {};
@@ -252,7 +252,7 @@ function arSadieCached(p) {
 }
 // External subtitles as real WebVTT files (sub.vdrk.site, the list ArrowTV's
 // player uses, ~0.3 s), with the SRT list from flikhub only as a fallback.
-// Default subtitle: Portuguese (PT) > Portuguese (BR) > English.
+// Default subtitle: English > Portuguese (PT) > Portuguese (BR).
 function arSubList(url, headers) {
     return arJson(url, headers).then(function (list) {
         return (Array.isArray(list) ? list : []).filter(function (s) { return s && /^https?:\/\//i.test(s.file || s.url || ''); })
@@ -269,16 +269,17 @@ function arSubsCached(p) {
         });
     });
 }
-// 0 = Portuguese (PT), 1 = Portuguese (BR) / Brazilian, 2 = English, 3 = anything else
+// 0 = English, 1 = English (hearing impaired / SDH), 2 = Portuguese (PT),
+// 3 = Portuguese (BR) / Brazilian, 4 = anything else
 function arSubRank(title) {
     var t = String(title).toLowerCase();
-    if (/^portuguese(\s*\d*)$/.test(t) || /^portuguese \((pt|portugal)\)/.test(t)) return 0;
-    if (/^portuguese/.test(t) || /^brazil/.test(t)) return 1;
-    if (/^english/.test(t) && !/\bhi\b|sdh/.test(t)) return 2;
-    return 3;
+    if (/^english/.test(t)) return /\bhi\b|sdh/.test(t) ? 1 : 0;
+    if (/^portuguese(\s*\d*)$/.test(t) || /^portuguese \((pt|portugal)\)/.test(t)) return 2;
+    if (/^portuguese/.test(t) || /^brazil/.test(t)) return 3;
+    return 4;
 }
 function arPickSub(list) {
-    var best = null, rank = 3;
+    var best = null, rank = 4;
     for (var i = 0; i < list.length; i++) { var r = arSubRank(list[i].title); if (r < rank) { rank = r; best = list[i]; } }
     return best;
 }
