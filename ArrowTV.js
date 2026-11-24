@@ -1,5 +1,5 @@
 /*
- * ArrowTV (arrowtv.net) — Sora / Shirox module — v1.4.0
+ * ArrowTV (arrowtv.net) — Sora / Shirox module — v1.4.1
  * Movies + TV shows. One standalone JavaScript file; no proxy, key or dependencies.
  *
  * Search, details and episodes come from arrowtv.net's own API/pages.
@@ -30,7 +30,7 @@ function arPage(type, id) {
 }
 function arLog(stage, error) {
     if (typeof console !== 'undefined' && typeof console.log === 'function')
-        console.log('[ArrowTV 1.4.0] ' + stage + ': ' + String(error && error.message || error));
+        console.log('[ArrowTV 1.4.1] ' + stage + ': ' + String(error && error.message || error));
 }
 async function soraFetch(url, options) {
     options = options || {};
@@ -250,32 +250,37 @@ function arJenniferCached(p) {
 function arSadieCached(p) {
     return arCached('sadie:' + arKey(p), AR_STREAM_TTL, function () { return arProxySource('sadie', 'Sadie · 720p · Hindi', p); });
 }
-// External subtitles (the same list ArrowTV's player shows): dozens of languages, ~0.2 s.
-// The first language found in AR_SUB_LANGS becomes the default subtitle.
-var AR_SUB_LANGS = ['Portuguese', 'Brazilian', 'English'];
+// External subtitles as real WebVTT files (sub.vdrk.site, the list ArrowTV's
+// player uses, ~0.3 s), with the SRT list from flikhub only as a fallback.
+// Default subtitle: Portuguese (PT) > Portuguese (BR) > English.
+function arSubList(url, headers) {
+    return arJson(url, headers).then(function (list) {
+        return (Array.isArray(list) ? list : []).filter(function (s) { return s && /^https?:\/\//i.test(s.file || s.url || ''); })
+            .map(function (s) { return { title: String(s.label || 'Subtitles'), url: encodeURI(decodeURI(s.file || s.url)) }; });
+    }, function () { return []; });
+}
 function arSubsCached(p) {
     var path = p.type === 'tv' ? 'tv/' + p.id + '/' + p.season + '/' + p.episode : 'movie/' + p.id;
     return arCached('subs:' + arKey(p), AR_STREAM_TTL, function () {
-        return arJson('https://proxy1.flikhub.net/subtitles/' + path, AR_PLAYER_HEADERS).then(function (list) {
-            return (Array.isArray(list) ? list : []).filter(function (s) { return s && /^https?:\/\//i.test(s.file || s.url || ''); })
-                .map(function (s) { return { title: String(s.label || 'Subtitles'), url: s.file || s.url }; });
+        return Promise.all([arSubList('https://sub.vdrk.site/v1/' + path), arSubList('https://sub.vdrk.site/v2/' + path)]).then(function (r) {
+            var seen = {}, vtt = r[0].concat(r[1]).filter(function (s) { var k = s.title.toLowerCase(); if (seen[k]) return false; seen[k] = true; return true; });
+            if (vtt.length) return vtt;
+            return arSubList('https://proxy1.flikhub.net/subtitles/' + path, AR_PLAYER_HEADERS); // .srt fallback
         });
     });
 }
-function arPickSub(list) {
-    for (var i = 0; i < AR_SUB_LANGS.length; i++) {
-        var lang = AR_SUB_LANGS[i].toLowerCase();
-        for (var j = 0; j < list.length; j++) {
-            var t = list[j].title.toLowerCase();
-            if (t === lang || t.indexOf(lang + ' ') === 0) return list[j];
-        }
-    }
-    return null;
-}
+// 0 = Portuguese (PT), 1 = Portuguese (BR) / Brazilian, 2 = English, 3 = anything else
 function arSubRank(title) {
     var t = String(title).toLowerCase();
-    for (var i = 0; i < AR_SUB_LANGS.length; i++) if (t.indexOf(AR_SUB_LANGS[i].toLowerCase()) === 0) return i;
-    return AR_SUB_LANGS.length;
+    if (/^portuguese(\s*\d*)$/.test(t) || /^portuguese \((pt|portugal)\)/.test(t)) return 0;
+    if (/^portuguese/.test(t) || /^brazil/.test(t)) return 1;
+    if (/^english/.test(t) && !/\bhi\b|sdh/.test(t)) return 2;
+    return 3;
+}
+function arPickSub(list) {
+    var best = null, rank = 3;
+    for (var i = 0; i < list.length; i++) { var r = arSubRank(list[i].title); if (r < rank) { rank = r; best = list[i]; } }
+    return best;
 }
 function arPrefetch(p) {
     try {
